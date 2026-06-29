@@ -1,0 +1,356 @@
+# БЛОК 1: ЗАГРУЗКА БИБЛИОТЕК (инструментов)
+import pandas as pd          # Главная библиотека - работа с таблицами (DataFrame)
+import numpy as np           # Для математики (средние, процентили, NaN)
+import seaborn as sns        # Для красивых графиков (высокого уровня)
+import matplotlib.pyplot as plt  # Базовая библиотека для графиков
+from datetime import datetime     # Для работы с датой и временем
+
+# Настройки для отображения графиков прямо в Colab
+%matplotlib inline
+sns.set_style("whitegrid")   # Делаем графики с сеткой (красивее)
+plt.rcParams['figure.figsize'] = (12, 6)  # Размер всех графиков
+
+print("="*60)
+print("ШАГ 1: Загрузка и первичный анализ данных")
+print("="*60)
+
+# БЛОК 2: ЗАГРУЗКА ДАННЫХ
+# Читаем CSV файл. Важно: sep=';' - разделитель точка с запятой (в Европе так часто)
+# Если бы разделитель был запятой, писали бы sep=','
+df = pd.read_csv('taxi_peru.csv', sep=';')
+
+# .shape - кортеж (строки, колонки). Узнаём размер таблицы
+print(f"Размер данных: {df.shape}")
+
+# .columns.tolist() - список всех названий колонок
+print(f"\nКолонки: {df.columns.tolist()}")
+
+# .head(3) - первые 3 строки (быстрый взгляд на данные)
+print("\nПервые 3 строки:")
+print(df.head(3))
+
+# .dtypes - типы данных каждой колонки (object=строка, int64=целое, float64=десятичная)
+print("\nТипы данных:")
+print(df.dtypes)
+
+# БЛОК 3: ПРОВЕРКА ПРОПУСКОВ
+print("\n" + "="*60)
+print("ШАГ 2: Проверка пропусков")
+print("="*60)
+
+# .isnull() - проверяет каждую ячейку: True если пропуск, False если есть значение
+# .sum() - суммирует True (как 1), получаем количество пропусков по колонкам
+print(df.isnull().sum())
+
+# ВОПРОС: Зачем проверять пропуски?
+# ОТВЕТ: Если много пропусков в важной колонке (например, driver_score),
+# то мы не сможем оценить водителя. Такие строки придётся удалить.
+
+# БЛОК 4: ПРЕДОБРАБОТКА ДАННЫХ (чистка)
+print("\n" + "="*60)
+print("ШАГ 3: Предобработка данных")
+print("="*60)
+
+# Проблема: в файле координаты с запятой "-12,1398", а Python ждёт точку "-12.1398"
+# Решение: проверяем тип, если строка - заменяем запятую на точку
+
+print("Типы колонок с координатами до преобразования:")
+print(f"start_lat: {df['start_lat'].dtype}")
+
+# Цикл по всем 4 колонкам с координатами
+for col in ['start_lat', 'start_lon', 'end_lat', 'end_lon']:
+    if df[col].dtype == 'object':  # object = строка
+        # .str.replace(',', '.') - заменяем запятую на точку
+        # .astype(float) - преобразуем строку в число (float)
+        df[col] = df[col].str.replace(',', '.').astype(float)
+    else:  # уже число
+        df[col] = df[col].astype(float)
+
+# БЛОК 5: ПРЕОБРАЗОВАНИЕ ДАТ И СОЗДАНИЕ МЕТРИК ВРЕМЕНИ
+print("\nПреобразование колонок с датами...")
+try:
+    # pd.to_datetime() - преобразует строку в объект datetime (можно вычислять разницу)
+    df['start_at'] = pd.to_datetime(df['start_at'])
+    df['end_at'] = pd.to_datetime(df['end_at'])
+    df['arrived_at'] = pd.to_datetime(df['arrived_at'])
+    print("Даты успешно преобразованы!")
+
+    # СОЗДАЁМ НОВЫЕ МЕТРИКИ:
+
+    # МЕТРИКА 1: Длительность поездки в минутах
+    # .dt.total_seconds() - сколько секунд между датами
+    # / 60 - переводим в минуты
+    df['duration_minutes'] = (df['end_at'] - df['start_at']).dt.total_seconds() / 60
+
+    # МЕТРИКА 2: Время ожидания водителя (минуты)
+    # Положительное = водитель приехал раньше (хорошо)
+    # Отрицательное = опоздал (плохо)
+    df['waiting_minutes'] = (df['start_at'] - df['arrived_at']).dt.total_seconds() / 60
+
+    print("Метрики времени созданы успешно!")
+except Exception as e:
+    print(f"Ошибка: {e}")
+
+# ВОПРОС: Что такое метрика?
+# ОТВЕТ: Это число, которое количественно измеряет какое-то свойство.
+# Например: длительность поездки, время ожидания, средняя оценка.
+# Метрики позволяют сравнивать объекты (водителей, пассажиров) между собой.
+
+# БЛОК 6: ФИЛЬТРАЦИЯ ДАННЫХ (оставляем только нужные)
+print("\nУникальные значения в 'end_state':")
+print(df['end_state'].unique())
+
+# Фильтрация: оставляем только завершённые поездки (drop off)
+# Логика: если поездка не завершена (отмена, not found) - она не информативна
+completed_trips = df[df['end_state'] == 'drop off'].copy()
+
+print(f"\nВсего поездок: {len(df)}")
+print(f"Завершённых поездок (drop off): {len(completed_trips)}")
+
+# Если нет 'drop off', берём все непустые
+if len(completed_trips) == 0:
+    completed_trips = df[df['end_state'].notna()].copy()
+
+# БЛОК 7: ПРЕОБРАЗОВАНИЕ ОЦЕНОК В ЧИСЛА
+for col in ['driver_score', 'rider_score']:
+    if col in completed_trips.columns:
+        # pd.to_numeric - преобразует в число, errors='coerce' - ошибки делает NaN
+        completed_trips[col] = pd.to_numeric(completed_trips[col], errors='coerce')
+
+# БЛОК 8: РАЗВЕДЫВАТЕЛЬНЫЙ АНАЛИЗ (статистика)
+print("\n" + "="*60)
+print("ШАГ 4: Анализ распределения оценок")
+print("="*60)
+
+# .describe() - волшебный метод! Выдаёт полную статистику:
+# count - сколько значений
+# mean - среднее арифметическое
+# std - стандартное отклонение (разброс)
+# min - минимальное
+# 25% - первый квартиль
+# 50% - медиана (второй квартиль)
+# 75% - третий квартиль
+# max - максимальное
+print(completed_trips['driver_score'].describe())
+
+# ВОПРОС: Что такое медиана и зачем она нужна?
+# ОТВЕТ: Медиана - это середина упорядоченного ряда. Она лучше среднего, если есть выбросы.
+# Пример: оценки [5,5,5,5,1] - среднее=4.2, медиана=5 (медиана точнее отражает реальность)
+
+# БЛОК 9: АНАЛИЗ КОЛИЧЕСТВА ПОЕЗДОК
+print("\n" + "="*60)
+print("ШАГ 5: Анализ количества поездок")
+print("="*60)
+
+# groupby - ГРУППИРОВКА (один из самых важных методов!)
+# Что делает: собирает все строки с одинаковым driver_id вместе
+# .size() - считает количество строк в каждой группе
+# .reset_index() - превращает результат обратно в DataFrame
+driver_trip_counts = completed_trips.groupby('driver_id').size().reset_index(name='total_trips')
+rider_trip_counts = completed_trips.groupby('user_id').size().reset_index(name='total_trips')
+
+# ВОПРОС: Как работает groupby?
+# ОТВЕТ: Как сводная таблица в Excel. Берём всех водителей и считаем их поездки.
+# Было: [водитель А, поездка1], [водитель А, поездка2], [водитель Б, поездка1]
+# Стало: водитель А: 2 поездки, водитель Б: 1 поездка
+
+# ПРОЦЕНТИЛИ - определяем границы для "лучших"
+percentile_75_driver = driver_trip_counts['total_trips'].quantile(0.75)
+percentile_75_rider = rider_trip_counts['total_trips'].quantile(0.75)
+
+print(f"75-й процентиль (водители): {percentile_75_driver} поездок")
+print(f"75-й процентиль (пассажиры): {percentile_75_rider} поездок")
+
+# ВОПРОС: Зачем нужны процентили?
+# ОТВЕТ: Чтобы отсеять случайных/неактивных пользователей.
+# 75-й процентиль означает: только 25% людей имеют больше этого числа поездок.
+# Именно их мы и будем рассматривать как кандидатов на премию.
+
+# БЛОК 10: СОЗДАНИЕ МЕТРИКИ ДЛЯ ВОДИТЕЛЕЙ
+print("ШАГ 6: Расчет метрик для водителей")
+
+
+# Агрегируем данные по каждому водителю
+driver_metrics = completed_trips.groupby('driver_id').agg({
+    'driver_score': 'mean',        # средняя оценка от пассажиров
+    'journey_id': 'count',         # количество поездок
+    'waiting_minutes': 'mean'      # среднее время ожидания
+}).rename(columns={
+    'driver_score': 'avg_driver_score',
+    'journey_id': 'total_trips',
+    'waiting_minutes': 'avg_waiting_minutes'
+}).reset_index()
+
+# Удаляем строки с пропусками (NaN)
+driver_metrics = driver_metrics.dropna()
+
+# НОРМАЛИЗАЦИЯ - приводим все метрики к шкале [0,1]
+# Зачем? Чтобы можно было складывать оценки с разными единицами измерения
+
+# Нормализация оценки: делим на 5 (максимальная оценка)
+driver_metrics['score_normalized'] = driver_metrics['avg_driver_score'] / 5.0
+
+# Нормализация количества поездок: делим на максимальное значение
+driver_metrics['trips_normalized'] = driver_metrics['total_trips'] / driver_metrics['total_trips'].max()
+
+# Нормализация времени ожидания (инвертированная - чем меньше, тем лучше)
+# Формула: 1 - (значение / максимум)
+driver_metrics['waiting_normalized'] = 1 - (driver_metrics['avg_waiting_minutes'] / driver_metrics['avg_waiting_minutes'].max())
+
+# ИТОГОВАЯ МЕТРИКА = взвешенная сумма
+# Веса подобраны экспертно (можно менять в зависимости от приоритетов компании)
+driver_metrics['driver_quality_score'] = (
+    driver_metrics['score_normalized'] * 0.5 +      # оценка важнее всего (50%)
+    driver_metrics['trips_normalized'] * 0.3 +      # опыт/лояльность (30%)
+    driver_metrics['waiting_normalized'] * 0.2      # пунктуальность (20%)
+)
+
+# Сортировка от лучшего к худшему
+driver_metrics = driver_metrics.sort_values('driver_quality_score', ascending=False)
+print("Топ-10 лучших водителей:")
+print(driver_metrics.head(10))
+
+# ВОПРОС: Почему именно такие веса (50%,30%,20%)?
+# ОТВЕТ: Это бизнес-решение. Для компании важнее всего, чтобы водителя хорошо оценивали.
+# Опыт и пунктуальность тоже важны, но меньше. Веса можно менять под задачи.
+
+# БЛОК 11: МЕТРИКА ДЛЯ ПАССАЖИРОВ
+
+
+rider_metrics = completed_trips.groupby('user_id').agg({
+    'rider_score': 'mean',        # средняя оценка от водителей
+    'journey_id': 'count'         # количество поездок
+}).rename(columns={
+    'rider_score': 'avg_rider_score',
+    'journey_id': 'total_trips'
+}).reset_index()
+
+rider_metrics = rider_metrics.dropna()
+
+# Нормализация
+rider_metrics['score_normalized'] = rider_metrics['avg_rider_score'] / 5.0
+rider_metrics['trips_normalized'] = rider_metrics['total_trips'] / rider_metrics['total_trips'].max()
+
+# Итоговая метрика (для пассажиров оценка ещё важнее - 70%)
+rider_metrics['passenger_quality_score'] = (
+    rider_metrics['score_normalized'] * 0.7 +
+    rider_metrics['trips_normalized'] * 0.3
+)
+
+rider_metrics = rider_metrics.sort_values('passenger_quality_score', ascending=False)
+print("Топ-10 лучших пассажиров:")
+print(rider_metrics.head(10))
+
+# БЛОК 12: ВИЗУАЛИЗАЦИЯ (ВОПРОС 1)
+
+
+# Создаём фигуру с двумя графиками рядом
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+# График 1: Boxplot (ящик с усами)
+# Показывает: медиану (линия), квартили (границы ящика), выбросы (точки)
+sns.boxplot(data=completed_trips, x='start_type', y='rider_score', ax=axes[0])
+axes[0].set_title('Оценки пассажиров по типу заказа')
+axes[0].set_xlabel('Тип заказа (asap/ reserved/ delayed)')
+axes[0].set_ylabel('Оценка пассажира (1-5)')
+
+# График 2: Столбчатая диаграмма со средними значениями
+avg_scores = completed_trips.groupby('start_type')['rider_score'].mean().reset_index()
+sns.barplot(data=avg_scores, x='start_type', y='rider_score', ax=axes[1], palette='viridis')
+axes[1].set_title('Средняя оценка пассажиров по типу заказа')
+
+plt.tight_layout()  # Автоматическая настройка отступов
+plt.show()
+
+# ВЫВОД ПО ВОПРОСУ 1:
+# Пассажиры с заказами 'asap' (срочные) получают более высокие оценки от водителей.
+# Возможно, потому что они более пунктуальны и готовы к поездке.
+
+# БЛОК 13: ВОПРОС 2 - ПРОДОЛЖИТЕЛЬНОСТЬ ПОЕЗДКИ
+
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+sns.boxplot(data=completed_trips, x='start_type', y='duration_minutes', ax=axes[0])
+axes[0].set_title('Продолжительность поездки по типу заказа')
+axes[0].set_ylabel('Длительность (минуты)')
+
+median_duration = completed_trips.groupby('start_type')['duration_minutes'].median().reset_index()
+sns.barplot(data=median_duration, x='start_type', y='duration_minutes', ax=axes[1], palette='coolwarm')
+axes[1].set_title('Медианная продолжительность поездки')
+
+plt.tight_layout()
+plt.show()
+
+# ВЫВОД ПО ВОПРОСУ 2:
+# Поездки 'reserved' (заранее забронированные) самые длинные.
+# Логично: если планируешь заранее, то, скорее всего, едешь далеко (в аэропорт и т.д.)
+
+# БЛОК 14: ВОПРОС 3 - ПЛАТФОРМА ЗАКАЗА
+
+
+fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+
+# График 1: Оценки водителей по платформам
+sns.boxplot(data=completed_trips, x='source', y='driver_score', ax=axes[0])
+axes[0].set_title('Оценки водителей по платформам')
+axes[0].tick_params(axis='x', rotation=45)
+
+# График 2: Оценки пассажиров по платформам
+sns.boxplot(data=completed_trips, x='source', y='rider_score', ax=axes[1])
+axes[1].set_title('Оценки пассажиров по платформам')
+axes[1].tick_params(axis='x', rotation=45)
+
+# График 3: Количество поездок по платформам
+platform_counts = completed_trips['source'].value_counts().reset_index()
+platform_counts.columns = ['source', 'count']
+sns.barplot(data=platform_counts, x='source', y='count', ax=axes[2], palette='Set2')
+axes[2].set_title('Количество поездок по платформам')
+axes[2].tick_params(axis='x', rotation=45)
+
+plt.tight_layout()
+plt.show()
+
+# ВЫВОД ПО ВОПРОСУ 3:
+# iPhone - самая популярная платформа, оценки примерно одинаковые.
+# Android пользователей меньше, но оценки не хуже.
+
+# БЛОК 15: ИТОГОВЫЕ ГРАФИКИ ДЛЯ РУКОВОДСТВА
+
+fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+
+# График: распределение качества водителей (гистограмма + кривая плотности)
+sns.histplot(driver_metrics['driver_quality_score'], bins=30, kde=True, ax=axes[0,0])
+axes[0,0].axvline(driver_metrics['driver_quality_score'].median(), color='red', linestyle='--')
+axes[0,0].set_title('Распределение качества водителей')
+axes[0,0].set_xlabel('Quality Score (0-1)')
+
+# График: распределение качества пассажиров
+sns.histplot(rider_metrics['passenger_quality_score'], bins=30, kde=True, ax=axes[0,1])
+axes[0,1].axvline(rider_metrics['passenger_quality_score'].median(), color='red', linestyle='--')
+axes[0,1].set_title('Распределение качества пассажиров')
+axes[0,1].set_xlabel('Quality Score (0-1)')
+
+# График: Топ-10 водителей
+top10_drivers = driver_metrics.head(10)
+sns.barplot(data=top10_drivers, x='driver_quality_score', y='driver_id', ax=axes[1,0], palette='Greens_d')
+axes[1,0].set_title('Топ-10 водителей по качеству')
+axes[1,0].set_xlabel('Quality Score')
+
+# График: Топ-10 пассажиров
+top10_passengers = rider_metrics.head(10)
+sns.barplot(data=top10_passengers, x='passenger_quality_score', y='user_id', ax=axes[1,1], palette='Blues_d')
+axes[1,1].set_title('Топ-10 пассажиров по качеству')
+
+plt.tight_layout()
+plt.show()
+
+# БЛОК 16: ФИНАЛЬНЫЙ ОТЧЕТ
+print(f"\n1. Всего поездок в файле: {len(df)}")
+print(f"2. Проанализировано завершённых поездок: {len(completed_trips)}")
+print(f"3. Количество активных водителей: {len(driver_trip_counts)}")
+print(f"4. Количество активных пассажиров: {len(rider_trip_counts)}")
+print(f"\n5. Рекомендуемое количество для премирования:")
+print(f"   - Водители: {len(top_drivers)} человек")
+print(f"   - Пассажиры: {len(top_passengers)} человек")
+
